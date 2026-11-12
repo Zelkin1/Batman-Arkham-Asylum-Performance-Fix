@@ -1,0 +1,1 @@
+Optional: put DXVK's 32-bit d3d9.dll here, renamed dxvk_d3d9.dll (https://github.com/doitsujin/dxvk/releases, x32 folder), then set dxvk=1 in BmFix.ini.

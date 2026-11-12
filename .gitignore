@@ -1,0 +1,7 @@
+logs/
+*.o
+*.a
+src/hook/*.dll
+Localization/INT/
+BmFixPhysX.bin
+BmFixCombos.bin

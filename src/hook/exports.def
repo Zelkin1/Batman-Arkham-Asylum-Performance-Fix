@@ -1,0 +1,23 @@
+LIBRARY faultrep.dll
+EXPORTS
+AddERExcludedApplicationA=px_0 @9
+AddERExcludedApplicationW=px_1 @10
+BasepReportFault=px_2 @3
+CancelHangReporting=px_3 @11
+CheckForReadOnlyResourceFilter=px_4 @4
+CheckPerUserCrossProcessThrottle=px_5 @5
+DllCanUnloadNow=px_6 @6
+DllGetClassObject=px_7 @7
+ReportCoreHang=px_8 @12
+ReportFault=px_9 @13
+ReportHang=px_10 @14
+UpdatePerUserLastCrossProcessCollectionTime=px_11 @8
+WerReportHang=px_12 @15
+WerpGetDebugger=px_13 @16
+WerpInitiateCrashReporting=px_14 @17
+WerpLaunchAeDebug=px_15 @18
+px_16 @1 NONAME
+px_17 @2 NONAME
+Init @19
+rtid @20 DATA
+BmFixProxy @21

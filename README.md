@@ -49,8 +49,6 @@ To change the configuration, edit `BmFix\BmFix.ini` and restart the game. Each l
 - `dxvk`: Set to 1 to run the game on Vulkan with DXVK (https://github.com/doitsujin/dxvk, zlib license). DXVK is not included. To use it, put the 32-bit `d3d9.dll` of DXVK into `BmFix\dxvk` and rename it to `dxvk_d3d9.dll`. DXVK compiles shaders in the background, but in tests its slowest frames were slower than with native D3D9 and the warm-up.
 - `[overrides]`: The lines of the engine configuration that BmFix replaces in the copy that the game reads. By default, the only line is `bInitializeShadersOnDemand=False`. With this line, the game creates its shaders when a level loads.
 
-BmFix does not change the frame rate limit. To set a limit, add `MaxSmoothedFrameRate=180` under `[overrides]`. To remove the limit of the game, add `bSmoothFrameRate=False`.
-
 `BmFix\logs\BmFixHook.log` shows what BmFix applied each time that the game started.
 
 ## Requirements

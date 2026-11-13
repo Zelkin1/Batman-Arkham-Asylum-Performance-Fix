@@ -1,6 +1,7 @@
 #!/bin/bash
-# builds faultrep.dll (drop-in) and BmFixHook.dll (same binary, for injection by a test harness) - 32-bit, no CRT,
-# with the msys2 ucrt64 toolchain (gcc -m32 + ld i386pe)
+# Builds faultrep.dll (the drop-in) and BmFixHook.dll (the same file, for injection by a test harness).
+# Both are 32-bit and do not use the C runtime library. The script uses the msys2 ucrt64 toolchain
+# (gcc -m32 and ld i386pe).
 set -e
 export PATH=/c/msys64/ucrt64/bin:$PATH
 cd "$(dirname "$0")"

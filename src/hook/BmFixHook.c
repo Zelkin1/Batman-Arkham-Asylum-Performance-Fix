@@ -1,10 +1,7 @@
-// BmFixHook.dll - in-process D3D9 hooks for Batman: Arkham Asylum (32-bit, no CRT).
-// Loaded by BmFix (or the probe) while the game is parked at its entry point. It repoints the exe's
-// d3d9!Direct3DCreate9 import, wraps IDirect3D9::CreateDevice and then hooks the device's vtable:
-//  - preload: new MANAGED textures / large mesh buffers are uploaded (PreLoad) a few frames after creation,
-//    at most PRE_BUDGET per frame, instead of stalling the first frame that draws them;
-//  - trace (phase 1): logs first-seen (vertex shader, pixel shader, declaration) combinations, slow draw
-//    calls and slow frames, to find what the driver compiles at draw time.
+// BmFix: stutter fixes for Batman: Arkham Asylum GOTY (32-bit DLL, no C runtime library).
+// The game loads this file as its faultrep.dll before its own code starts. A test harness can also inject it as
+// BmFixHook.dll. It changes the Direct3DCreate9 import of the exe, wraps IDirect3D9::CreateDevice, and then hooks
+// the vtable (the table of method addresses) of the device. The fixes are in the sections below.
 #define WIN32_LEAN_AND_MEAN
 #define COBJMACROS
 #include <windows.h>
@@ -123,11 +120,12 @@ static HRESULT WINAPI H_CreateIndexBuffer(IDirect3DDevice9 *d, UINT len, DWORD u
 }
 
 // ---------------------------------------------------------------- shader warm-up: identity tables (BMFIX_WARM=1)
-// The NVIDIA D3D9 driver compiles a shader the first time it is drawn, not when it is created, so a material
-// seen for the first time costs 0.3-0.5 ms of compile per new pixel shader (a camera turn that reveals a new
-// area draws dozens in one frame). Every (vertex shader, pixel shader, declaration) combination the game draws is
-// recorded by bytecode hash in BmFixCombos.bin; in later sessions each recorded combination is drawn once, off
-// screen (zero-area triangle), as soon as its shaders exist - i.e. while the game is loading.
+// The NVIDIA D3D9 driver compiles a shader the first time that the game draws with it, not when the game creates
+// it. Each new pixel shader costs 0.3-0.5 ms, and a camera turn into a new area can draw dozens in one frame.
+// BmFix records each combination of vertex shader, pixel shader, and declaration that the game draws. It stores
+// them by bytecode hash in BmFixCombos.bin. In later sessions, BmFix draws each recorded combination one time
+// as soon as its shaders exist, which is while the game loads. It draws a triangle with no area, so nothing
+// shows on the screen.
 #define HM_N 32768
 typedef struct { DWORD h; void *p; } HEnt;
 static HEnt vsBy[HM_N], psBy[HM_N], vdBy[HM_N];
@@ -341,7 +339,7 @@ static void warm_run(IDirect3DDevice9 *d)
     IDirect3DVertexBuffer9 *svb[8]; UINT soff[8], sstr[8], sfrq[8];
     int i, s, n = 0, began = 0, scannedAll = 1, budget;
     if (nwarmed >= npend) return;
-    // full budget while the game is loading (shaders being created, or long frames); 2 per frame otherwise
+    // Use the full budget while the game loads (it creates shaders, or the frames are long). Otherwise, use 2 in each frame.
     budget = (frame - lastCreateFrame < 30 || lastFrameUs > 25000) ? warmBudget : 2;
     if (nCreates == lastScanCreates && frame - lastScanFrame < 300) return;   // nothing new to match since the last full scan
     if (!warmVB)
@@ -387,11 +385,12 @@ static void warm_run(IDirect3DDevice9 *d)
 }
 
 // ---------------------------------------------------------------- background compiler (BMFIX_BG=1)
-// A second D3D9 device, owned by a below-normal-priority thread with a never-shown 8x8 window, draws every
-// recorded combination once from copies of the game's shader bytecode, so the driver compiles them off the
-// game's render thread. Only useful if the driver shares compiled shaders between devices of a process.
-// MEASURED: it does not (NVIDIA, 2026-11): all 543 combinations compiled in the background within 1.2 s and
-// the game's first-draw compile stalls were unchanged. Kept off (BMFIX_BG unset); use BMFIX_WARM instead.
+// A second D3D9 device draws each recorded combination one time from copies of the shader bytecode of the game.
+// A low-priority thread owns it, with an 8x8 window that never shows. The goal was to make the driver compile
+// the shaders away from the render thread of the game. This helps only if the driver shares compiled shaders
+// between the devices of one process. A test showed that the NVIDIA driver does not (2026-11). All 543
+// combinations compiled in the background in 1.2 s, but the game still paused at the first draw. This code is
+// off unless BMFIX_BG=1. The warm-up (BMFIX_WARM) is the fix that works.
 typedef HRESULT (WINAPI *PFN_CD2)(IDirect3D9 *, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS *, IDirect3DDevice9 **);
 typedef IDirect3D9 *(WINAPI *PFN_D3DC2)(UINT);
 static DWORD bgFlags = 0x42; static D3DFORMAT bgFmt = D3DFMT_A8R8G8B8; static int bgStarted, bgCompiled;
@@ -538,8 +537,9 @@ static HRESULT WINAPI H_Present(IDirect3DDevice9 *d, const RECT *a, const RECT *
 
 
 // ---------------------------------------------------------------- generic per-method timing (BMFIX_PROF=1)
-// Every hooked vtable slot gets a 10-byte thunk "mov eax,slot; jmp prof_common". On the render thread (and not
-// nested) prof_common times the original call with rdtsc; other threads jump straight to the original.
+// Each hooked vtable slot gets a 10-byte thunk: "mov eax,slot" and then "jmp prof_common". On the render thread,
+// prof_common measures the time of the original call with rdtsc, but not for a call inside another timed call.
+// On other threads, the thunk goes directly to the original method.
 #define NSLOT 512
 void *thunkOrig[NSLOT] __attribute__((used));
 unsigned long long thunkTicks[NSLOT] __attribute__((used));
@@ -731,11 +731,11 @@ static IDirect3D9 *WINAPI H_Direct3DCreate9(UINT sdk)
 
 
 // ---------------------------------------------------------------- level streaming time budget
-// UWorld::AddToWorld (exe 1.1, fixed base 0x400000) makes a streamed level visible over several frames, but may
-// spend up to 5 ms per frame doing it (IsTimeLimitExceeded and the AddToWorld step loops compare the elapsed ms
-// against a shared double 5.0 at 0x1E4AA08). At a 5.5 ms frame that pushes the frame past 8.3 ms. The five
-// "fld qword ptr [0x1E4AA08]" in those two functions are repointed to our own limit; the other 42 users of the
-// constant are left alone. Each site is checked byte-for-byte first.
+// UWorld::AddToWorld (exe 1.1, fixed base 0x400000) shows a streamed level over several frames. It can spend up
+// to 5 ms in each frame on this work. IsTimeLimitExceeded and the AddToWorld step loops compare the elapsed ms
+// with a shared double 5.0 at 0x1E4AA08. If a frame already takes 5.5 ms, this work makes it longer than 8.3 ms.
+// BmFix points the five "fld qword ptr [0x1E4AA08]" in those two functions to its own limit. The 42 other uses
+// of the constant do not change. BmFix compares the bytes of each site before it changes them.
 static double streamLimitMs = 5.0;
 static int patchStreaming(double ms)
 {
@@ -755,8 +755,8 @@ static int patchStreaming(double ms)
     FlushInstructionCache(GetCurrentProcess(), (void *)0x9B0000, 0x30000);
     return 1;
 }
-// AddToWorld's two incremental loops update 10 components per step ("push 0Ah" at 0x9D0050 / 0x9D00F7) and
-// only check the time between steps; a smaller step overshoots the budget less.
+// The two step loops of AddToWorld update 10 components in each step ("push 0Ah" at 0x9D0050 and 0x9D00F7).
+// They read the time only between steps, so a smaller step goes less far over the time limit.
 static int patchStreamStep(int n)
 {
     static const DWORD sites[] = { 0x9D0050, 0x9D00F7 };
@@ -816,7 +816,8 @@ static int writeAll(const WCHAR *path, const void *b, DWORD n)
     WriteFile(h, b, n, &w, NULL); CloseHandle(h);
     return w == n;
 }
-// next line of a text buffer: *s/*n = the line without CR/LF; returns the start of the following line or 0 at the end
+// Gets the next line of a text buffer. *s and *n get the line without CR/LF. Returns the start of the line after
+// it, or 0 at the end of the buffer.
 static const char *nextLine(const char *p, const char **s, int *n)
 {
     const char *e = p;
@@ -828,12 +829,13 @@ static const char *nextLine(const char *p, const char **s, int *n)
 }
 
 // ---------------------------------------------------------------- PhysX cloth cooking cache (physx_cache=1)
-// With PhysX on, the game cooks every cloth mesh (banners, flags, capes...) synchronously on the game thread the
-// first time its level becomes visible in a session: 10-20 ms per mesh in PhysXCooking.dll!NxCookClothMesh. The
-// cooked result only depends on the mesh description and the cooking parameters, so it is kept in BmFixPhysX.bin:
-// in later sessions the cooked bytes are written to the game's stream instead of cooking again.
-// Checked before hooking: the exact prologue of NxCookClothMesh and the PhysXCooking.dll build (PhysX 2.8.1,
-// TimeDateStamp 60ED96E7, whose cooking parameters live at RVA 57CB8). Anything else: no hook, normal cooking.
+// With PhysX on, the game cooks each cloth mesh (banners, flags, capes) on the game thread the first time that its
+// level becomes visible in a session. Each mesh takes 10-20 ms in PhysXCooking.dll!NxCookClothMesh, and the game
+// waits for it. The cooked result depends only on the mesh description and the cooking parameters. BmFix keeps it
+// in BmFixPhysX.bin. In later sessions, BmFix writes the kept bytes to the stream of the game and does not cook.
+// Before BmFix hooks the function, it compares the exact first bytes of NxCookClothMesh and the build of
+// PhysXCooking.dll (PhysX 2.8.1, TimeDateStamp 60ED96E7, cooking parameters at RVA 57CB8). If either one is
+// different, BmFix does not hook, and the game cooks as usual.
 static int opt_physx;
 typedef unsigned char (__cdecl *PFN_COOK)(const void *desc, void *stream);
 static PFN_COOK cookClothOrig;
@@ -886,7 +888,8 @@ static int clothKey(const DWORD *d, unsigned long long *out)
     *out = h;
     return 1;
 }
-// a write-only NxStream that records what the cooker writes (MSVC thiscall vtable: dtor, 6 reads, 6 stores)
+// A write-only NxStream that records the bytes that the cooker writes. Its vtable has the MSVC thiscall layout:
+// destructor, 6 read methods, 6 store methods.
 typedef struct Rec { void **vt; unsigned char *buf; unsigned len, cap; } Rec;
 #define TC __attribute__((thiscall))
 static void recPut(Rec *r, const void *p, unsigned n)
@@ -978,7 +981,7 @@ static void physxLoad(const WCHAR *path)
     pxFile = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     logf("physx: cloth cooking cache %ls, %u meshes", path, cnt);
 }
-// called from the log thread until PhysXCooking.dll is loaded (the PhysX runtime loads it during the game's start-up)
+// The log thread calls this until PhysXCooking.dll is loaded. The PhysX runtime loads it while the game starts.
 static void physxPoll(void)
 {
     static const unsigned char pro[9] = { 0x55, 0x8B, 0xEC, 0x81, 0xEC, 0x28, 0x01, 0x00, 0x00 };
@@ -1052,9 +1055,9 @@ static double optnum(const WCHAR *env, const char *key, double def)
 }
 
 // ---------------------------------------------------------------- engine ini copy + localization folder (drop-in mode)
-// The engine gets -ENGINEINI=<read-only copy of the user's BmEngine.ini> with the [overrides]
-// of BmFix.ini applied and LocalizationPaths= pointing at BmFix\Localization (copies of the game's .int files plus
-// empty stubs for the ~110 names the game looks up but never shipped).
+// The engine gets -ENGINEINI= with a read-only copy of the BmEngine.ini of the user. The copy has the
+// [overrides] of BmFix.ini, and its LocalizationPaths= points to BmFix\Localization. That folder has copies of the
+// .int files of the game and empty files for the ~110 names that the game looks for but does not have.
 static WCHAR iniArgW[MAX_PATH + 32];
 static int prepLocalization(char *locA, int cap)
 {
@@ -1158,20 +1161,21 @@ static void prepare(void)
         if (!done) { memcpy(out + o, s, ln); o += ln; }
         out[o++] = '\r'; out[o++] = '\n';
     }
-    // UE3 ends -ENGINEINI= at the first space: space-free (8.3) temp path
+    // UE3 stops the -ENGINEINI= value at the first space, so the copy goes to a temp path with no spaces (8.3 name).
     GetTempPathW(MAX_PATH, tmp); wcat(tmp, L"BmFix"); CreateDirectoryW(tmp, NULL);
     if (wfind(tmp, L" ")) { WCHAR sh[MAX_PATH]; if (GetShortPathNameW(tmp, sh, MAX_PATH)) wcpy(tmp, sh); }
     if (wfind(tmp, L" ")) { logf("ini: temp path has spaces (no 8.3 name) - the game uses its own config"); return; }
     wcpy(dst, tmp); wcat(dst, L"\\BmEngine.ini");
     SetFileAttributesW(dst, FILE_ATTRIBUTE_NORMAL);
     if (!writeAll(dst, out, o)) { logf("ini: could not write %ls", dst); return; }
-    SetFileAttributesW(dst, FILE_ATTRIBUTE_READONLY);   // a writable one gets regenerated by UE3
+    SetFileAttributesW(dst, FILE_ATTRIBUTE_READONLY);   // UE3 writes a new file over a copy that is not read-only
     wcpy(iniArgW, L" -ENGINEINI="); wcat(iniArgW, dst);
     logf("ini: %ls -> %ls (%d overrides, localization %s)", src, dst, nov, haveLoc ? "on" : "off");
     HeapFree(GetProcessHeap(), 0, in); HeapFree(GetProcessHeap(), 0, out);
 }
-// The game reads its command line through its GetCommandLineW import: the first call builds the ini copy and
-// appends -ENGINEINI=..., unless the command line already sets one (the test harness, the user).
+// The game reads its command line through its GetCommandLineW import. At the first call, BmFix makes the ini copy
+// and adds -ENGINEINI=... to the command line. If the command line already has -ENGINEINI (from the test harness
+// or the user), BmFix does not add it.
 typedef LPWSTR (WINAPI *PFN_GCL)(void);
 static PFN_GCL gclOrig;
 static LPWSTR volatile gclNew;
@@ -1202,9 +1206,10 @@ static LPWSTR WINAPI H_GetCommandLineW(void)
 }
 
 // ---------------------------------------------------------------- export forwarding (drop-in: BmFix is the game's faultrep.dll)
-// faultrep.dll (Windows Error Reporting) is imported by the game for ReportFault only, used when it crashes; no
-// other mod uses this name, so BmFix coexists with d3d9.dll / dinput8.dll / dxgi.dll mods (ReShade, DXVK, ASI
-// loaders). Every export is a thunk to the real system faultrep.dll, loaded on first use.
+// The game imports faultrep.dll (Windows Error Reporting) only for ReportFault, which it calls when it crashes.
+// No other mod uses this name, so BmFix works together with d3d9.dll, dinput8.dll, and dxgi.dll mods (ReShade,
+// DXVK, ASI loaders). Each export is a thunk to the real faultrep.dll of Windows, which BmFix loads at the first
+// call.
 static const char *const pxNames[] = { "AddERExcludedApplicationA", "AddERExcludedApplicationW", "BasepReportFault", "CancelHangReporting",
     "CheckForReadOnlyResourceFilter", "CheckPerUserCrossProcessThrottle", "DllCanUnloadNow", "DllGetClassObject", "ReportCoreHang",
     "ReportFault", "ReportHang", "UpdatePerUserLastCrossProcessCollectionTime", "WerReportHang", "WerpGetDebugger",
@@ -1342,8 +1347,9 @@ static void init(HMODULE self, int proxy)
     logf("options: hook=%d preload=%d warm=%d trace=%d physx_cache=%d dxvk=%d, tsc %u/us", opt_hookon, opt_preload, opt_warm, opt_trace, opt_physx, opt_dxvk, tpu);
 }
 
-// Injected (test harness): LoadLibraryW while the game's main thread is parked at its entry
-// point, then Init from a second remote thread. Does nothing when the drop-in faultrep.dll is already active.
+// Injected mode, for a test harness. The harness calls LoadLibraryW while the main thread of the game waits at its
+// entry point, and then calls Init from a second remote thread. If the drop-in faultrep.dll already runs, Init
+// does nothing.
 DWORD WINAPI Init(LPVOID p)
 {
     WCHAR v[4];
@@ -1351,8 +1357,8 @@ DWORD WINAPI Init(LPVOID p)
     init((HMODULE)p, envflag(L"BMFIX_FORCEPROXY", 0));
     return d3dCreateOrig || !opt_hookon ? 1 : 0;
 }
-// Drop-in: the game loads this file as its faultrep.dll before its entry point runs. Other programs that might load
-// it from the same folder only get the forwarding.
+// Drop-in mode. The game loads this file as its faultrep.dll before its entry point runs. If another program loads
+// it from the same folder, that program gets only the forwarding to the real faultrep.dll.
 BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID p)
 {
     if (r == DLL_PROCESS_ATTACH)

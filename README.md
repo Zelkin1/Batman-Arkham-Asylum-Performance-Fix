@@ -24,7 +24,7 @@ To remove BmFix, delete `faultrep.dll` and the `BmFix` folder.
 
 ## What it fixes
 
-The causes in the table were measured with a frame-time probe. A frame-time probe is a tool that records how long each frame takes and what the game does during it.
+The causes in the table were measured with a frame-time probe that records how long each frame takes and what the game does during it.
 
 | Cause | Fix |
 |---|---|

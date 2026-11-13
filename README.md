@@ -4,7 +4,7 @@ BmFix removes most stutters from Batman: Arkham Asylum Game of the Year Edition,
 
 You copy BmFix into the game folder. BmFix does not change the game files. It works when you start the game from Steam, from a game launcher such as AsylumLauncher, or from a shortcut. It also works together with ReShade, DXVK, and other mods that use `d3d9.dll`.
 
-The table shows the results of a 15-second camera spin after a save loads. A slow frame is a frame that takes more than 8.33 ms. During a slow frame, the game runs below 120 frames per second (fps).
+The table shows the results of benchmark run. During a slow frame, the game runs below 120 frames per second (fps).
 
 | | Slow frames | Slowest frame |
 |---|---|---|

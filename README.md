@@ -1,6 +1,6 @@
 # Batman Arkham Asylum Performance Fix
 
-BmFix removes most stutters (short pauses in the game picture) from Batman: Arkham Asylum Game of the Year Edition, the Steam version for PC. It is an unofficial fan project. Rocksteady, Warner Bros. and DC do not make or support it.
+BmFix removes most stutters from Batman: Arkham Asylum Game of the Year Edition, the Steam version for PC. It is an unofficial fan project. Rocksteady, Warner Bros. and DC do not make or support it.
 
 You copy BmFix into the game folder. BmFix does not change the game files. It works when you start the game from Steam, from a game launcher such as AsylumLauncher, or from a shortcut. It also works together with ReShade, DXVK, and other mods that use `d3d9.dll`.
 
